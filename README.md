@@ -1,6 +1,6 @@
 # Trae Switch
 
-**Trae Switch** 是一个专为 Trae IDE 设计的工具，通过 DNS 劫持 + 本地反向代理，让 Trae IDE 支持第三方大模型服务商 API（如阿里百炼 Coding Plan、kimi coding plan等）。
+**Trae Switch** 是一个专为 Trae IDE 设计的工具，通过 DNS 劫持 + 本地反向代理，让 Trae IDE 支持第三方大模型服务商 API（如阿里百炼 Coding Plan、kimi coding plan等）。详细使用教程：https://mp.weixin.qq.com/s/W_Z_nbrO7ioU8upcq4KkOw
 
 ## 🚀 功能特点
 
