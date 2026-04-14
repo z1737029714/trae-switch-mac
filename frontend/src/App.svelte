@@ -4,6 +4,8 @@
   import Card from './components/ui/Card.svelte'
 
   let status = {
+    platform: '',
+    requiresAdminRuntime: false,
     runningAsAdmin: false,
     hostsSet: false,
     certInstalled: false,
@@ -11,8 +13,12 @@
     proxyPort: 443,
     portAvailable: true,
     portProcess: '',
+    portRedirectSet: false,
+    macosTrusted: false,
     activeProvider: null,
-    activeTargetURL: ''
+    activeTargetURL: '',
+    providerReady: false,
+    providerError: ''
   }
 
   let providers = []
@@ -149,6 +155,18 @@
     loading = false
   }
 
+  async function installMacOSTrust() {
+    loading = true
+    try {
+      await window.go.main.App.InstallMacOSTrust()
+      await refreshStatus()
+      showSuccess('macOS 一次性授权已完成')
+    } catch (e) {
+      showError(e.message || String(e))
+    }
+    loading = false
+  }
+
   async function startProxy() {
     loading = true
     try {
@@ -174,6 +192,10 @@
   }
 
   function getStartReminder() {
+    if (!status.providerReady) {
+      return status.providerError || '请先添加并选择第三方服务商'
+    }
+
     if (!status.hostsSet && !status.certInstalled) {
       return '请先完成 Hosts 配置并安装 CA 证书后再启动'
     }
@@ -256,6 +278,24 @@
       return
     }
 
+    if (providerForm.models.length === 0) {
+      showError('请至少添加一个模型 ID')
+      return
+    }
+
+    let parsedURL
+    try {
+      parsedURL = new URL(providerForm.openaiBase.trim())
+    } catch {
+      showError('API 地址必须是完整 URL')
+      return
+    }
+
+    if (parsedURL.hostname.toLowerCase() === 'api.openai.com') {
+      showError('服务商地址不能是 api.openai.com')
+      return
+    }
+
     try {
       if (editingProviderIndex >= 0) {
         await window.go.main.App.UpdateProvider(
@@ -276,6 +316,7 @@
 
       showProviderModal = false
       await loadProviders()
+      await refreshStatus()
     } catch (e) {
       showError(e.message || String(e))
     }
@@ -294,9 +335,10 @@
     }
   }
 
-  $: adminWarning = !status.runningAsAdmin
+  $: adminWarning = status.requiresAdminRuntime && !status.runningAsAdmin
   $: portWarning = !status.portAvailable && !status.proxyRunning
-  $: primaryButtonDisabled = loading || (!status.proxyRunning && (adminWarning || portWarning))
+  $: providerWarning = !status.proxyRunning && !status.providerReady
+  $: primaryButtonDisabled = loading || (!status.proxyRunning && (adminWarning || portWarning || providerWarning))
   $: primaryButtonLabel = status.proxyRunning ? '停止' : '启动'
   $: primaryButtonVariant = status.proxyRunning ? 'destructive' : 'default'
   $: displayTargetURL = status.activeTargetURL || '未设置'
@@ -357,16 +399,22 @@
 
     {#if adminWarning}
       <div class="rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm text-yellow-600 dark:text-yellow-500">
-        需要以管理员权限运行应用后才能监听 443 端口。
+        需要以管理员权限运行应用后才能监听 {status.proxyPort} 端口。
       </div>
     {/if}
 
     {#if portWarning}
       <div class="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
-        443 端口已被占用，请先关闭占用该端口的程序。
+        {status.proxyPort} 端口已被占用，请先关闭占用该端口的程序。
         {#if status.portProcess}
           <span class="mt-1 block text-xs opacity-80">{status.portProcess}</span>
         {/if}
+      </div>
+    {/if}
+
+    {#if providerWarning}
+      <div class="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+        {status.providerError || '请先添加并选择第三方服务商。'}
       </div>
     {/if}
 
@@ -383,8 +431,40 @@
       <div class="mt-3 space-y-1 text-xs text-muted-foreground">
         <div>当前服务商：{activeProviderName}</div>
         <div class="break-all">当前目标：{displayTargetURL}</div>
+        <div>服务商状态：{status.providerReady ? '可用' : '未就绪'}</div>
+        {#if status.providerError}
+          <div class="text-destructive">{status.providerError}</div>
+        {/if}
+        {#if status.platform === 'darwin'}
+          <div>端口转发：{status.portRedirectSet ? '已启用' : '未启用'}</div>
+        {/if}
       </div>
     </Card>
+
+    {#if status.platform === 'darwin'}
+      <Card className="p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="font-semibold">macOS 一次性授权</h2>
+            <p class="mt-1 text-sm text-muted-foreground">
+              证书安装仍然可能需要系统确认。
+            </p>
+            <div class="mt-2 text-xs text-muted-foreground">
+              当前状态：{status.macosTrusted ? '已授权' : '未授权'}
+            </div>
+          </div>
+
+          <Button
+            variant={status.macosTrusted ? 'outline' : 'default'}
+            size="sm"
+            on:click={installMacOSTrust}
+            disabled={loading || status.macosTrusted}
+          >
+            {status.macosTrusted ? '已授权' : '一键授权'}
+          </Button>
+        </div>
+      </Card>
+    {/if}
 
     <Card className="p-4">
       <div class="mb-4 flex items-center justify-between">

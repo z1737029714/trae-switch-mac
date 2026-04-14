@@ -1,19 +1,19 @@
 # Trae Switch
 
-**Trae Switch** 是一个专为 Trae IDE 设计的工具，通过 DNS 劫持 + 本地反向代理，让 Trae IDE 支持第三方大模型服务商 API（如阿里百炼 Coding Plan、kimi coding plan等）。详细使用教程：https://mp.weixin.qq.com/s/W_Z_nbrO7ioU8upcq4KkOw
+**Trae Switch** 是一个专为 Trae IDE 设计的工具，通过 DNS 劫持 + 本地反向代理，让 Trae IDE 支持第三方大模型服务商 API（如阿里百炼 Coding Plan、Kimi Coding Plan 等）。
+
+当前仓库是面向 macOS 的版本，目标是让你在 macOS 上直接把 Trae 的 OpenAI 请求转发到自定义第三方服务商。
 
 ## 🚀 功能特点
 
 - **多服务商支持**：可添加、编辑、删除多个服务商配置
-- **本地模型管理**：`/v1/models` 请求返回本地配置的模型（因为第三方通常不支持此接口）
-- **自动 Hosts 配置**：将 `api.openai.com` 重定向到 `127.0.0.1`
 - **CA 证书管理**：生成并安装本地 CA 证书，用于 HTTPS 拦截
 - **实时状态监控**：显示代理运行状态和当前激活的服务商
 - **不需要输入key**：通过在trae中配置key，在本工具不需要输入任何apikey
 
 ## 📋 支持的服务商
 
-- ✅ 阿里百炼、Kimi等 Coding Plan
+- ✅ 支持 /v1 服务商
 - ✅ 其他支持 OpenAI 协议的第三方api服务商
 
 ## 🔧 技术架构
@@ -22,7 +22,7 @@
 - **后端**：Go (Wails 框架)
 - **前端**：Svelte + Tailwind CSS
 - **网络**：HTTPS 代理服务器
-- **系统**：Windows 系统集成（Hosts 管理、证书安装）
+- **系统**：macOS 系统集成（Hosts 管理、证书安装、443 端口转发）
 
 ### 核心模块
 1. **代理服务器**：监听 443 端口，处理 OpenAI API 请求
@@ -31,19 +31,76 @@
 4. **证书管理**：生成和安装自签名 CA 证书
 5. **前端界面**：现代化的用户交互界面
 
-## 📦 安装方法
+## 📦 macOS 拉源码后怎么跑
 
-### 方法一：直接下载可执行文件
-1. 从 [Releases](https://github.com/yourusername/trae-switch/releases) 页面下载最新版本的 `trae-switch.exe`
-2. 以管理员身份运行程序
+### 1. 环境要求
 
-### 方法二：从源码构建
-1. 克隆仓库：
-   ```bash
-   git clone https://github.com/yourusername/trae-switch.git
-   cd trae-switch
-   ```
-2. 安装依赖并编译
+请先确保本机具备下面这些依赖：
+
+- macOS 11.0 及以上
+- Xcode Command Line Tools
+- Go 1.24 或更高版本
+- Node.js 18+ 和 npm
+
+如果你还没装 Xcode Command Line Tools，可以先执行：
+
+```bash
+xcode-select --install
+```
+
+### 2. 拉代码
+
+```bash
+git clone https://github.com/z1737029714/trae-switch-mac.git
+cd trae-switch-mac
+```
+
+### 3. 构建 macOS App
+
+```bash
+./scripts/build-macos.sh
+```
+
+这个脚本会自动完成下面几件事：
+
+- 如果 `frontend/node_modules` 不存在，会自动执行 `npm install`
+- 执行前端构建
+- 编译 Go 后端
+- 生成 `build/Trae Switch.app`
+- 如果存在 `build/appicon.png`，会自动打包成应用图标
+- 如果本机 `127.0.0.1:7890` 有可用代理，会自动用于依赖下载；没有就直接走默认网络，不需要手动设置环境变量
+
+### 4. 启动 App
+
+构建完成后直接打开：
+
+```bash
+open "build/Trae Switch.app"
+```
+
+也可以在 Finder 里双击 `build/Trae Switch.app`。
+
+### 5. 第一次启动建议按这个顺序操作
+
+1. 打开应用后，先点击「一键授权」
+2. 如果弹出系统密码框，输入一次即可
+3. 再安装 CA 证书，并在系统钥匙串里设为信任
+4. 添加你的第三方 provider
+5. 点击「启动」开启代理
+
+说明：
+
+- 「一键授权」主要用于 Hosts 和 443 端口转发，正常情况下只需要做一次
+- 后续日常开关代理，不应该每次都重复要求输入系统密码
+- 安装或信任 CA 证书时，macOS 仍可能弹出一次系统级确认，这是系统行为
+
+### 6. 复现构建 + 启动
+
+```bash
+cd trae-switch-mac
+./scripts/build-macos.sh
+open "build/Trae Switch.app"
+```
 
 ## 🛠️ 使用方法
 
@@ -71,7 +128,13 @@
 
 ## ⚙️ 配置文件
 
-配置文件位于程序同目录下的 `config.json`，格式如下：
+如果你是通过源码构建并直接打开 `build/Trae Switch.app`，配置文件默认位于：
+
+```bash
+build/Trae Switch.app/Contents/MacOS/config.json
+```
+
+格式如下：
 
 ```json
 {
@@ -102,10 +165,13 @@
 
 ### Q: 启动失败怎么办？
 **A:** 请检查：
-- 是否以管理员身份运行
+- 是否使用的是 macOS 11.0 及以上
+- `xcode-select --install` 是否已执行
+- `go version` 和 `npm -v` 是否可用
 - 443 端口是否被占用
 - Hosts 配置是否成功
 - CA 证书是否安装
+- 第一次打开未签名应用时，是否已在 Finder 里右键应用并选择「打开」
 
 ### Q: 模型不显示怎么办？
 **A:** 请确保：

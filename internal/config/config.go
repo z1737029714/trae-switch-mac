@@ -2,8 +2,12 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -23,6 +27,10 @@ var (
 	cfg     *Config
 	cfgPath string
 	once    sync.Once
+
+	ErrNoActiveProvider      = errors.New("请先添加并选择第三方服务商")
+	ErrProviderTargetsOpenAI = errors.New("服务商地址不能是 api.openai.com")
+	ErrProviderModelsEmpty   = errors.New("请至少为当前服务商配置一个模型 ID")
 )
 
 func GetConfigPath() string {
@@ -106,6 +114,9 @@ func AddProvider(provider Provider) error {
 	if cfg == nil {
 		return nil
 	}
+	if _, err := validateProviderTarget(provider); err != nil {
+		return err
+	}
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
 	cfg.Providers = append(cfg.Providers, provider)
@@ -115,6 +126,9 @@ func AddProvider(provider Provider) error {
 func UpdateProvider(index int, provider Provider) error {
 	if cfg == nil {
 		return nil
+	}
+	if _, err := validateProviderTarget(provider); err != nil {
+		return err
 	}
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -156,4 +170,45 @@ func GetModels() []string {
 		return []string{}
 	}
 	return provider.Models
+}
+
+func ValidateActiveProviderTarget() (*url.URL, error) {
+	provider := GetActiveProvider()
+	if provider == nil {
+		return nil, ErrNoActiveProvider
+	}
+
+	return validateProviderTarget(*provider)
+}
+
+func validateProviderTarget(provider Provider) (*url.URL, error) {
+	if strings.TrimSpace(provider.OpenAIBase) == "" {
+		return nil, ErrNoActiveProvider
+	}
+
+	targetURL, err := url.Parse(strings.TrimSpace(provider.OpenAIBase))
+	if err != nil {
+		return nil, fmt.Errorf("服务商地址无效：%w", err)
+	}
+
+	if targetURL.Scheme == "" || targetURL.Host == "" {
+		return nil, fmt.Errorf("服务商地址必须是完整 URL")
+	}
+
+	if strings.EqualFold(targetURL.Hostname(), "api.openai.com") {
+		return nil, ErrProviderTargetsOpenAI
+	}
+
+	hasModel := false
+	for _, model := range provider.Models {
+		if strings.TrimSpace(model) != "" {
+			hasModel = true
+			break
+		}
+	}
+	if !hasModel {
+		return nil, ErrProviderModelsEmpty
+	}
+
+	return targetURL, nil
 }

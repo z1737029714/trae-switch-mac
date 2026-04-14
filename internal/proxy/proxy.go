@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,10 +33,12 @@ type ProxyServer struct {
 }
 
 type ProxyStatus struct {
-	Running   bool   `json:"running"`
-	Address   string `json:"address"`
-	Port      int    `json:"port"`
-	TargetURL string `json:"targetUrl"`
+	Running       bool   `json:"running"`
+	Address       string `json:"address"`
+	Port          int    `json:"port"`
+	TargetURL     string `json:"targetUrl"`
+	ProviderReady bool   `json:"providerReady"`
+	ProviderError string `json:"providerError"`
 }
 
 func NewProxyServer(listenAddr string, listenPort int) *ProxyServer {
@@ -56,12 +59,61 @@ func (p *ProxyServer) SetCertificate(certPEM, keyPEM []byte) {
 	p.keyPEM = keyPEM
 }
 
-func (p *ProxyServer) getTargetURL() string {
-	provider := config.GetActiveProvider()
-	if provider == nil || provider.OpenAIBase == "" {
-		return "https://api.openai.com"
+func (p *ProxyServer) getProviderStatus() (string, bool, string) {
+	targetURL, err := config.ValidateActiveProviderTarget()
+	if err != nil {
+		provider := config.GetActiveProvider()
+		if provider != nil {
+			return provider.OpenAIBase, false, err.Error()
+		}
+		return "", false, err.Error()
 	}
-	return provider.OpenAIBase
+
+	return targetURL.String(), true, ""
+}
+
+func buildProxyDirector(targetURL *url.URL) func(*http.Request) {
+	return func(req *http.Request) {
+		req.URL.Scheme = targetURL.Scheme
+		req.URL.Host = targetURL.Host
+		req.Host = targetURL.Host
+		req.URL.Path = rewriteTargetPath(targetURL.Path, req.URL.Path)
+		req.URL.RawPath = rewriteTargetPath(targetURL.EscapedPath(), req.URL.EscapedPath())
+		req.URL.RawQuery = joinQuery(targetURL.RawQuery, req.URL.RawQuery)
+		log.Printf("[Proxy] %s %s -> %s%s", req.Method, req.URL.Path, targetURL.Host, req.URL.Path)
+	}
+}
+
+func rewriteTargetPath(basePath, requestPath string) string {
+	if basePath == "" || basePath == "/" {
+		if requestPath == "" {
+			return "/"
+		}
+		return requestPath
+	}
+
+	trimmedBase := strings.TrimRight(basePath, "/")
+	trimmedRequest := requestPath
+	if strings.HasSuffix(trimmedBase, "/v1") && strings.HasPrefix(trimmedRequest, "/v1") {
+		trimmedRequest = strings.TrimPrefix(trimmedRequest, "/v1")
+	}
+	trimmedRequest = strings.TrimLeft(trimmedRequest, "/")
+	if trimmedRequest == "" {
+		return trimmedBase
+	}
+
+	return trimmedBase + "/" + trimmedRequest
+}
+
+func joinQuery(targetQuery, requestQuery string) string {
+	switch {
+	case targetQuery == "":
+		return requestQuery
+	case requestQuery == "":
+		return targetQuery
+	default:
+		return targetQuery + "&" + requestQuery
+	}
 }
 
 func (p *ProxyServer) Start(ctx context.Context) error {
@@ -87,14 +139,14 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	targetBaseURL := p.getTargetURL()
-	targetURL, err := url.Parse(targetBaseURL)
+	targetURL, err := config.ValidateActiveProviderTarget()
 	if err != nil {
 		p.mu.Unlock()
-		return fmt.Errorf("failed to parse target URL: %w", err)
+		return err
 	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(targetURL)
+	reverseProxy.Director = buildProxyDirector(targetURL)
 	reverseProxy.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: false,
@@ -106,13 +158,6 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(fmt.Sprintf(`{"error": {"message": "Proxy error: %v", "type": "proxy_error"}}`, err)))
-	}
-
-	reverseProxy.Director = func(req *http.Request) {
-		req.URL.Scheme = "https"
-		req.URL.Host = targetURL.Host
-		req.Host = targetURL.Host
-		log.Printf("[Proxy] %s %s -> https://%s%s", req.Method, req.URL.Path, targetURL.Host, req.URL.Path)
 	}
 
 	reverseProxy.ModifyResponse = func(resp *http.Response) error {
@@ -218,11 +263,14 @@ func (p *ProxyServer) IsRunning() bool {
 func (p *ProxyServer) GetStatus() ProxyStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	targetURL, providerReady, providerError := p.getProviderStatus()
 	return ProxyStatus{
-		Running:   p.running,
-		Address:   p.listenAddr,
-		Port:      p.listenPort,
-		TargetURL: p.getTargetURL(),
+		Running:       p.running,
+		Address:       p.listenAddr,
+		Port:          p.listenPort,
+		TargetURL:     targetURL,
+		ProviderReady: providerReady,
+		ProviderError: providerError,
 	}
 }
 

@@ -66,26 +66,15 @@ func (hm *HostsManager) IsSet() (bool, error) {
 }
 
 func (hm *HostsManager) Set() error {
-	isSet, err := hm.IsSet()
-	if err != nil {
-		return err
-	}
-	if isSet {
-		return nil
-	}
-
-	if err := hm.Backup(); err != nil {
-		return err
-	}
-
 	data, err := hm.ReadHosts()
 	if err != nil {
 		return err
 	}
 
-	entry := fmt.Sprintf("\n%s\n%s %s\n%s\n", HostsMarkerStart, TargetIP, TargetDomain, HostsMarkerEnd)
-
-	newData := append(data, []byte(entry)...)
+	newData, err := hm.BuildSetData(data)
+	if err != nil {
+		return err
+	}
 
 	return hm.WriteHosts(newData)
 }
@@ -96,14 +85,32 @@ func (hm *HostsManager) Restore() error {
 		return err
 	}
 
+	newData, err := hm.BuildRestoreData(data)
+	if err != nil {
+		return err
+	}
+
+	return hm.WriteHosts(newData)
+}
+
+func (hm *HostsManager) BuildSetData(data []byte) ([]byte, error) {
+	if bytes.Contains(data, []byte(HostsMarkerStart)) {
+		return data, nil
+	}
+
+	entry := fmt.Sprintf("\n%s\n%s %s\n%s\n", HostsMarkerStart, TargetIP, TargetDomain, HostsMarkerEnd)
+	return append(data, []byte(entry)...), nil
+}
+
+func (hm *HostsManager) BuildRestoreData(data []byte) ([]byte, error) {
 	startIdx := bytes.Index(data, []byte(HostsMarkerStart))
 	if startIdx == -1 {
-		return nil
+		return data, nil
 	}
 
 	endIdx := bytes.Index(data, []byte(HostsMarkerEnd))
 	if endIdx == -1 {
-		return errors.New("malformed hosts file: found start marker but no end marker")
+		return nil, errors.New("malformed hosts file: found start marker but no end marker")
 	}
 
 	endIdx += len(HostsMarkerEnd)
@@ -118,7 +125,7 @@ func (hm *HostsManager) Restore() error {
 		newData = append(newData, data[endIdx:]...)
 	}
 
-	return hm.WriteHosts(newData)
+	return newData, nil
 }
 
 func (hm *HostsManager) GetEntries() ([]string, error) {
