@@ -12,11 +12,14 @@ import (
 	"trae-switch/internal/cert"
 	"trae-switch/internal/config"
 	"trae-switch/internal/hosts"
+	"trae-switch/internal/menubar"
 	"trae-switch/internal/platform"
 	"trae-switch/internal/portforward"
 	"trae-switch/internal/privileged"
 	"trae-switch/internal/proxy"
 	"trae-switch/internal/truststore"
+
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
@@ -30,6 +33,7 @@ type App struct {
 	runner       privileged.Runner
 	access       *privileged.Access
 	forwarder    *portforward.Manager
+	menuBar      menubar.Controller
 }
 
 func NewApp() *App {
@@ -76,6 +80,11 @@ func (a *App) startup(ctx context.Context) {
 
 	if _, err := config.Load(); err != nil {
 		log.Printf("Failed to load config: %v", err)
+	}
+
+	if a.runtime.GOOS() == "darwin" {
+		a.menuBar = menubar.New(a)
+		a.menuBar.Start()
 	}
 
 	log.Println("Application started successfully")
@@ -147,24 +156,40 @@ func (a *App) IsRunningAsAdmin() bool {
 
 func (a *App) SetHosts() error {
 	if a.runtime.GOOS() == "darwin" {
-		return a.updateHostsDarwin(true)
+		err := a.updateHostsDarwin(true)
+		if err == nil {
+			a.emitStateChanged()
+		}
+		return err
 	}
 
 	if a.runtime.RequiresAdminRuntime() && !truststore.IsRunningAsAdmin() {
 		return fmt.Errorf("需要管理员权限")
 	}
-	return a.hostsManager.Set()
+	err := a.hostsManager.Set()
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) RestoreHosts() error {
 	if a.runtime.GOOS() == "darwin" {
-		return a.updateHostsDarwin(false)
+		err := a.updateHostsDarwin(false)
+		if err == nil {
+			a.emitStateChanged()
+		}
+		return err
 	}
 
 	if a.runtime.RequiresAdminRuntime() && !truststore.IsRunningAsAdmin() {
 		return fmt.Errorf("需要管理员权限")
 	}
-	return a.hostsManager.Restore()
+	err := a.hostsManager.Restore()
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) IsHostsSet() bool {
@@ -181,7 +206,11 @@ func (a *App) InstallCertificate() error {
 		return fmt.Errorf("生成证书失败：%w", err)
 	}
 
-	return a.trustManager.Install()
+	err := a.trustManager.Install()
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) InstallMacOSTrust() error {
@@ -192,14 +221,22 @@ func (a *App) InstallMacOSTrust() error {
 		return fmt.Errorf("macOS 一次性授权未初始化")
 	}
 
-	return a.access.Install()
+	err := a.access.Install()
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) UninstallCertificate() error {
 	if a.runtime.RequiresAdminRuntime() && !truststore.IsRunningAsAdmin() {
 		return fmt.Errorf("需要管理员权限")
 	}
-	return a.trustManager.Uninstall()
+	err := a.trustManager.Uninstall()
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) IsCertificateInstalled() bool {
@@ -232,6 +269,7 @@ func (a *App) StartProxy() error {
 		}
 	}
 
+	a.emitStateChanged()
 	return nil
 }
 
@@ -257,6 +295,7 @@ func (a *App) StopProxy() error {
 		return errors.New(strings.Join(errs, "; "))
 	}
 
+	a.emitStateChanged()
 	return nil
 }
 
@@ -325,7 +364,11 @@ func (a *App) GetActiveProviderIndex() int {
 }
 
 func (a *App) SetActiveProvider(index int) error {
-	return config.SetActiveProvider(index)
+	err := config.SetActiveProvider(index)
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) AddProvider(name, openaiBase string, models []string) error {
@@ -334,7 +377,11 @@ func (a *App) AddProvider(name, openaiBase string, models []string) error {
 		OpenAIBase: openaiBase,
 		Models:     models,
 	}
-	return config.AddProvider(provider)
+	err := config.AddProvider(provider)
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) UpdateProvider(index int, name, openaiBase string, models []string) error {
@@ -343,21 +390,83 @@ func (a *App) UpdateProvider(index int, name, openaiBase string, models []string
 		OpenAIBase: openaiBase,
 		Models:     models,
 	}
-	return config.UpdateProvider(index, provider)
+	err := config.UpdateProvider(index, provider)
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) DeleteProvider(index int) error {
-	return config.DeleteProvider(index)
+	err := config.DeleteProvider(index)
+	if err == nil {
+		a.emitStateChanged()
+	}
+	return err
 }
 
 func (a *App) shutdown(ctx context.Context) {
 	log.Println("Application shutting down...")
+	if a.menuBar != nil {
+		a.menuBar.Close()
+		a.menuBar = nil
+	}
 	if a.IsProxyRunning() || a.forwarder != nil {
 		if err := a.StopProxy(); err != nil {
 			log.Printf("Failed to stop proxy: %v", err)
 		}
 	}
 	_ = ctx
+}
+
+func (a *App) ShowMainWindow() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.Show(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+	wailsruntime.WindowUnminimise(a.ctx)
+}
+
+func (a *App) QuitApp() error {
+	if a.ctx == nil {
+		return fmt.Errorf("应用尚未初始化")
+	}
+
+	wailsruntime.Quit(a.ctx)
+	return nil
+}
+
+func (a *App) GetMenuBarState() menubar.State {
+	providers := config.GetProviders()
+	result := menubar.State{
+		ProxyRunning:        a.IsProxyRunning(),
+		ActiveProviderIndex: config.GetActiveProviderIndex(),
+		ActiveProviderName:  "未选择",
+		Providers:           make([]menubar.Provider, 0, len(providers)),
+	}
+
+	for index, provider := range providers {
+		result.Providers = append(result.Providers, menubar.Provider{
+			Index: index,
+			Name:  provider.Name,
+		})
+	}
+
+	if activeProvider := config.GetActiveProvider(); activeProvider != nil && strings.TrimSpace(activeProvider.Name) != "" {
+		result.ActiveProviderName = activeProvider.Name
+	}
+
+	return result
+}
+
+func (a *App) emitStateChanged() {
+	if a.menuBar != nil {
+		a.menuBar.Refresh()
+	}
+	if a.ctx != nil {
+		wailsruntime.EventsEmit(a.ctx, "app:state-changed")
+	}
 }
 
 func (a *App) updateHostsDarwin(set bool) error {

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import Button from './components/ui/Button.svelte'
   import Card from './components/ui/Card.svelte'
+  import { EventsOn } from '../wailsjs/runtime/runtime'
 
   let status = {
     platform: '',
@@ -59,12 +60,25 @@
     localStorage.setItem('theme', nextTheme)
   }
 
-  onMount(async () => {
+  onMount(() => {
     const savedTheme = localStorage.getItem('theme')
     applyTheme(themes.some((item) => item.value === savedTheme) ? savedTheme : 'dark')
 
-    await refreshStatus()
-    await loadProviders()
+    const unsubscribe = EventsOn('app:state-changed', async () => {
+      await refreshStatus()
+      await loadProviders()
+    })
+
+    ;(async () => {
+      await refreshStatus()
+      await loadProviders()
+    })()
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe()
+      }
+    }
   })
 
   function toggleTheme() {

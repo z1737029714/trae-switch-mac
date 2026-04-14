@@ -84,6 +84,25 @@ func buildProxyDirector(targetURL *url.URL) func(*http.Request) {
 	}
 }
 
+func newReverseProxy(targetURL *url.URL, transport *http.Transport) *httputil.ReverseProxy {
+	reverseProxy := httputil.NewSingleHostReverseProxy(targetURL)
+	reverseProxy.Director = buildProxyDirector(targetURL)
+	reverseProxy.Transport = transport
+	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("[Proxy Error] %s %s: %v", r.Method, r.URL.Path, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(fmt.Sprintf(`{"error": {"message": "Proxy error: %v", "type": "proxy_error"}}`, err)))
+	}
+	reverseProxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Set("Access-Control-Allow-Origin", "*")
+		resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		resp.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		return nil
+	}
+	return reverseProxy
+}
+
 func rewriteTargetPath(basePath, requestPath string) string {
 	if basePath == "" || basePath == "/" {
 		if requestPath == "" {
@@ -139,35 +158,16 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	targetURL, err := config.ValidateActiveProviderTarget()
-	if err != nil {
+	if _, err := config.ValidateActiveProviderTarget(); err != nil {
 		p.mu.Unlock()
 		return err
 	}
 
-	reverseProxy := httputil.NewSingleHostReverseProxy(targetURL)
-	reverseProxy.Director = buildProxyDirector(targetURL)
-	reverseProxy.Transport = &http.Transport{
+	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: false,
 		},
 	}
-
-	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("[Proxy Error] %s %s: %v", r.Method, r.URL.Path, err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte(fmt.Sprintf(`{"error": {"message": "Proxy error: %v", "type": "proxy_error"}}`, err)))
-	}
-
-	reverseProxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Set("Access-Control-Allow-Origin", "*")
-		resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		resp.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		return nil
-	}
-
-	models := config.GetModels()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "OPTIONS" {
@@ -179,6 +179,7 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 		}
 
 		if r.URL.Path == "/v1/models" && r.Method == "GET" {
+			models := config.GetModels()
 			modelList := make([]map[string]interface{}, 0)
 			for _, model := range models {
 				modelList = append(modelList, map[string]interface{}{
@@ -201,6 +202,16 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 			return
 		}
 
+		targetURL, err := config.ValidateActiveProviderTarget()
+		if err != nil {
+			log.Printf("[Proxy Error] invalid provider target for %s %s: %v", r.Method, r.URL.Path, err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte(fmt.Sprintf(`{"error": {"message": "%v", "type": "provider_error"}}`, err)))
+			return
+		}
+
+		reverseProxy := newReverseProxy(targetURL, transport)
 		reverseProxy.ServeHTTP(w, r)
 	})
 

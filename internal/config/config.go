@@ -31,6 +31,7 @@ var (
 	ErrNoActiveProvider      = errors.New("请先添加并选择第三方服务商")
 	ErrProviderTargetsOpenAI = errors.New("服务商地址不能是 api.openai.com")
 	ErrProviderModelsEmpty   = errors.New("请至少为当前服务商配置一个模型 ID")
+	ErrInvalidProviderIndex  = errors.New("服务商索引无效")
 )
 
 func GetConfigPath() string {
@@ -82,7 +83,9 @@ func GetProviders() []Provider {
 	}
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
-	return cfg.Providers
+	result := make([]Provider, len(cfg.Providers))
+	copy(result, cfg.Providers)
+	return result
 }
 
 func GetActiveProvider() *Provider {
@@ -92,7 +95,8 @@ func GetActiveProvider() *Provider {
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 	if cfg.ActiveProvider >= 0 && cfg.ActiveProvider < len(cfg.Providers) {
-		return &cfg.Providers[cfg.ActiveProvider]
+		provider := cfg.Providers[cfg.ActiveProvider]
+		return &provider
 	}
 	return nil
 }
@@ -107,7 +111,7 @@ func SetActiveProvider(index int) error {
 		cfg.ActiveProvider = index
 		return cfg.Save()
 	}
-	return nil
+	return ErrInvalidProviderIndex
 }
 
 func AddProvider(provider Provider) error {
@@ -136,7 +140,7 @@ func UpdateProvider(index int, provider Provider) error {
 		cfg.Providers[index] = provider
 		return cfg.Save()
 	}
-	return nil
+	return ErrInvalidProviderIndex
 }
 
 func DeleteProvider(index int) error {
@@ -152,7 +156,7 @@ func DeleteProvider(index int) error {
 		}
 		return cfg.Save()
 	}
-	return nil
+	return ErrInvalidProviderIndex
 }
 
 func GetActiveProviderIndex() int {

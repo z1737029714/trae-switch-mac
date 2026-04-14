@@ -15,14 +15,23 @@ var assets embed.FS
 func main() {
 	app := NewApp()
 
-	err := wails.Run(&options.App{
-		Title:            "Trae Switch",
-		Width:            500,
-		Height:           700,
-		AssetServer:      &assetserver.Options{Assets: assets},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+	err := wails.Run(newWailsOptions(app))
+
+	if err != nil {
+		println("Error: " + err.Error())
+	}
+}
+
+func newWailsOptions(app *App) *options.App {
+	return &options.App{
+		Title:             "Trae Switch",
+		Width:             500,
+		Height:            700,
+		HideWindowOnClose: true,
+		AssetServer:       &assetserver.Options{Assets: assets},
+		BackgroundColour:  &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		OnStartup:         app.startup,
+		OnShutdown:        app.shutdown,
 		Bind: []interface{}{
 			app,
 		},
@@ -34,9 +43,5 @@ func main() {
 			WebviewUserDataPath:               "",
 			Theme:                             windows.SystemDefault,
 		},
-	})
-
-	if err != nil {
-		println("Error: " + err.Error())
 	}
 }
