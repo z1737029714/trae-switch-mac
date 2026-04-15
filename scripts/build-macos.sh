@@ -15,7 +15,10 @@ APP_CONFIG="$APP_MACOS_DIR/config.json"
 APP_PLIST="$APP_CONTENTS_DIR/Info.plist"
 APP_ICON_SOURCE="$ROOT_DIR/build/appicon.png"
 APP_ICON_NAME="AppIcon"
-APP_CUSTOM_ICON_FILE="$APP_BUNDLE/Icon"$'\r'
+APP_ICON_ICNS="$APP_RESOURCES_DIR/${APP_ICON_NAME}.icns"
+APP_ICON_FILE="$APP_BUNDLE/Icon"$'\r'
+APP_ICON_RSRC="${TMPDIR:-/tmp}/trae-switch-icon.rsrc"
+SWIFT_MODULE_CACHE_PATH="${SWIFT_MODULE_CACHE_PATH:-/tmp/trae-switch-swift-module-cache}"
 
 export GOCACHE="${GOCACHE:-/tmp/trae-switch-go-build}"
 export GOMODCACHE="${GOMODCACHE:-/tmp/trae-switch-go-mod}"
@@ -32,6 +35,7 @@ fi
 
 mkdir -p "$ROOT_DIR/build/bin"
 mkdir -p "$APP_MACOS_DIR" "$APP_RESOURCES_DIR"
+mkdir -p "$SWIFT_MODULE_CACHE_PATH"
 
 if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   echo "Installing frontend dependencies..."
@@ -49,16 +53,94 @@ cp "$OUTPUT_BIN" "$APP_BIN"
 chmod +x "$APP_BIN"
 
 if [[ -f "$APP_ICON_SOURCE" ]]; then
-  ICON_RSRC="$(mktemp /tmp/trae-switch.icon.rsrc.XXXXXX)"
-  trap 'rm -f "$ICON_RSRC"' EXIT
-
-  rm -f "$APP_CUSTOM_ICON_FILE"
+  rm -f "$APP_ICON_FILE"
   cp "$APP_ICON_SOURCE" "$APP_RESOURCES_DIR/${APP_ICON_NAME}.png"
+  swift -module-cache-path "$SWIFT_MODULE_CACHE_PATH" - "$APP_ICON_SOURCE" "$APP_ICON_ICNS" <<'SWIFT'
+import AppKit
+import Foundation
+import ImageIO
+
+let arguments = CommandLine.arguments
+guard arguments.count == 3 else {
+    fputs("usage: swift - <input-png> <output-icns>\n", stderr)
+    exit(1)
+}
+
+let inputPath = arguments[1]
+let outputPath = arguments[2]
+let iconType = "com.apple.icns" as CFString
+let pixelSizes = [16, 32, 64, 128, 256, 512, 1024]
+
+guard let sourceImage = NSImage(contentsOfFile: inputPath) else {
+    fputs("failed to load icon source: \(inputPath)\n", stderr)
+    exit(1)
+}
+
+let outputURL = URL(fileURLWithPath: outputPath)
+guard let destination = CGImageDestinationCreateWithURL(outputURL as CFURL, iconType, pixelSizes.count, nil) else {
+    fputs("failed to create icns destination: \(outputPath)\n", stderr)
+    exit(1)
+}
+
+for size in pixelSizes {
+    guard let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: size,
+        pixelsHigh: size,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+    ) else {
+        fputs("failed to create bitmap for size \(size)\n", stderr)
+        exit(1)
+    }
+
+    bitmap.size = NSSize(width: size, height: size)
+
+    NSGraphicsContext.saveGraphicsState()
+    guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+        fputs("failed to create graphics context for size \(size)\n", stderr)
+        exit(1)
+    }
+    NSGraphicsContext.current = context
+    context.imageInterpolation = .high
+
+    let targetRect = NSRect(x: 0, y: 0, width: size, height: size)
+    NSColor.clear.set()
+    targetRect.fill()
+    sourceImage.draw(
+        in: targetRect,
+        from: NSRect(origin: .zero, size: sourceImage.size),
+        operation: .copy,
+        fraction: 1.0
+    )
+    NSGraphicsContext.restoreGraphicsState()
+
+    guard let cgImage = bitmap.cgImage else {
+        fputs("failed to create CGImage for size \(size)\n", stderr)
+        exit(1)
+    }
+    CGImageDestinationAddImage(destination, cgImage, nil)
+}
+
+if !CGImageDestinationFinalize(destination) {
+    fputs("failed to finalize icns output: \(outputPath)\n", stderr)
+    exit(1)
+}
+SWIFT
+
+  # Finder on recent macOS builds is more reliable when the bundle also
+  # carries a classic custom icon resource alongside AppIcon.icns.
   sips -i "$APP_ICON_SOURCE" >/dev/null
-  xcrun DeRez -only icns "$APP_ICON_SOURCE" > "$ICON_RSRC"
-  xcrun Rez -append "$ICON_RSRC" -o "$APP_CUSTOM_ICON_FILE"
-  xcrun SetFile -a C "$APP_BUNDLE"
-  xcrun SetFile -a V "$APP_CUSTOM_ICON_FILE"
+  DeRez -only icns "$APP_ICON_SOURCE" > "$APP_ICON_RSRC"
+  Rez -append "$APP_ICON_RSRC" -o "$APP_ICON_FILE"
+  SetFile -a V "$APP_ICON_FILE"
+  SetFile -a C "$APP_BUNDLE"
+  rm -f "$APP_ICON_RSRC"
 fi
 
 cat > "$APP_PLIST" <<'EOF'
@@ -76,6 +158,8 @@ cat > "$APP_PLIST" <<'EOF'
   <string>com.z1737029714.trae-switch</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleName</key>
   <string>Trae Switch</string>
   <key>CFBundlePackageType</key>
@@ -95,5 +179,7 @@ EOF
 if [[ ! -f "$APP_CONFIG" && -f "$CLI_CONFIG" ]]; then
   cp "$CLI_CONFIG" "$APP_CONFIG"
 fi
+
+touch "$APP_BUNDLE"
 
 echo "Build finished: $APP_BUNDLE"

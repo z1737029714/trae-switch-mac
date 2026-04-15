@@ -12,6 +12,8 @@
   <string>com.z1737029714.trae-switch</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleName</key>
   <string>Trae Switch</string>
   <key>CFBundlePackageType</key>
